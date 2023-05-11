@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }}</title>
+    <style>
+        .content-wrapper {
+            max-width: 800px;
+            margin: 0 auto;
+            text-align: center;
+        }
+        .audio-container {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            margin: 1rem 0;
+        }
+        .audio-sample {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="content-wrapper">
+        <h1>{{ page_heading }}</h1>
+        <div>
+            <h2>ID: {{ audio_pair.title }}</h2>
+            <div class="audio-container">
+                <div class="audio-sample">
+                    <p>Clip A:</p>
+                    <audio controls>
+                        <source src="../{{ audio_pair.path_a }}" type="{{ audio_pair.mime_type }}">
+                        Your browser does not support the audio element.
+                    </audio>
+                </div>
+                <div class="audio-sample">
+                    <p>Clip B:</p>
+                    <audio controls>
+                        <source src="../{{ audio_pair.path_b }}" type="{{ audio_pair.mime_type }}">
+                        Your browser does not support the audio element.
+                    </audio>
+                </div>
+            </div>
+        </div>
+        <iframe src="https://docs.google.com/forms/d/e/1FAIpQLSdKTnaPkdkC3qKDTWMxQPk5yZlmGFqC4cysujgPJDuMq9Hoag/viewform?embedded=true" width="640" height="711" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>
+    </div>
+</body>
+</html>

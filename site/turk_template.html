@@ -1,0 +1,62 @@
+<style>
+th, td {
+    border: 2px solid black;
+    padding: 8px;
+}
+th {
+    width: 250px;
+    vertical-align: text-top;
+    font-weight: normal;
+}
+.noborder {
+    width: 250px;
+    border: 0px solid black;
+}
+.thlab {
+    margin-bottom: 1em;
+}
+.td {
+    text-align: center;
+    vertical-align: middle;
+}
+input[type=radio] {
+    border: 0px;
+    width: 100%;
+    height: 4em;
+}
+audio {
+    width: 200px;
+}
+input[type=submit] {
+    margin-top: 20px;
+    width: 20em;
+    height: 2em;
+}
+</style>
+<html>
+<h2>Tell us which audio excerpt is more conventionally musical.</h2>
+<p><b>Please use headphones in a quiet environment if possible.</b></p>
+<p>Both excerpts begin with the same 5 second introduction.</p>
+<p>The remaining 15 seconds may or may not be computer generated.</p>
+<p>Indicate which excerpt you find more conventionally musical.</p>
+<p>If both excerpts have similar musicality, indicate that they are equally musical.</p>
+<div class="form-group">
+<table>
+    <tbody>
+    <tr>
+      <th colspan=3><div class="thlab"><b>Excerpt A</b></div><div><audio controls=""><source src="${recording_0_url}" type="audio/mpeg"/></audio></div></th>
+      <th colspan=3><div class="thlab"><b>Excerpt B</b></div><div><audio controls=""><source src="${recording_1_url}" type="audio/mpeg"/></audio></div></th>
+    </tr>
+    <tr>
+        <th colspan=6><div class="thlab"><b>Musicality</b></div></th>
+    </tr>
+        <tr>
+            <th colspan=2><div class="thlab"><b>Excerpt A</b><br> is more musical</div><div><input class="form-control" type="radio" required="" name="preference" value="1"></div></th>
+            <th colspan=2><div class="thlab">Excerpts A and B<br> are <b>equally musical</b></div><div><input class="form-control" type="radio" required="" name="preference" value="2"></div></th>
+            <th colspan=2><div class="thlab"><b>Excerpt B</b><br> is more musical</div><div><input class="form-control" type="radio" required="" name="preference" value="3"></div></th>
+        </tr>
+    </tbody>
+</table>
+<input type="submit">
+</div>
+</html>
