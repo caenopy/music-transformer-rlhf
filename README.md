@@ -4,9 +4,6 @@
 ## Generate audio clips from MIDI samples
 ```./generate_mp3_from_midi.sh /path/to/input/directory /path/to/output/directory```
 
-./generate_mp3_from_midi.sh "/Users/gestalt/Desktop/CS 224R/Project/figaro/samples/figaro-expert/max_iter=16000,max_bars=32" "/Users/gestalt/Desktop/CS 224R/Project/music-transformer-rlhf/audio-dataset"
-
-
 The ```generate_mp3_from_midi.sh``` script will generate audio files for every
 MIDI file in the directory that doesn't already have an associated mp3. It uses
 VLC and the default AudioUnit DLS synthesizer in macOS with the following command:
