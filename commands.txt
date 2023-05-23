@@ -1,0 +1,16 @@
+ROOT_DIR=/scr/jthickstun/lmd_full MODEL=figaro-baseline CHECKPOINT=/nlp/scr/jthickstun/figaro/checkpoints/baseline.ckpt python src/generate.py
+
+MAX_N_FILES=10 ROOT_DIR=/jagupard13/scr0/jthickstun/lmd_full/f MODEL=figaro-baseline CHECKPOINT=/nlp/scr/jthickstun/figaro/checkpoints/baseline-john.ckpt python src/generate.py
+
+
+
+LOGGING_DIR=/scr/biggest/jthickstun/logs OUTPUT_DIR=/scr/biggest/jthickstun/results ROOT_DIR=/scr/biggest/jthickstun/lmd_full MODEL=baseline python src/train.py
+
+=====
+
+
+Generate audio:
+./generate_mp3_from_midi.sh "/Users/gestalt/Desktop/CS 224R/Project/figaro/samples/figaro-expert/max_iter=16000,max_bars=32" "/Users/gestalt/Desktop/CS 224R/Project/music-transformer-rlhf/audio-dataset"
+
+Generate pages:
+python generate_pages.py "../audio-dataset" "pages"
