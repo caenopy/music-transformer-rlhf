@@ -244,6 +244,7 @@ class Seq2SeqModule(pl.LightningModule):
     logits = self(x, z=z, labels=labels, bar_ids=bar_ids, position_ids=position_ids, description_bar_ids=desc_bar_ids)
     # Shape of logits: (batch_size, tgt_len, tuple_size, vocab_size)
     pred = logits.view(-1, logits.shape[-1])
+    # Shape of pred: (batch_size * tgt_len * tuple_size, vocab_size)
     labels = labels.reshape(-1)
     
     loss = self.loss_fn(pred, labels)
