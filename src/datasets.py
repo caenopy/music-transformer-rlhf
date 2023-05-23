@@ -261,6 +261,7 @@ class MidiDataset(IterableDataset):
 
       # Identify positions
       position_ids = self.get_positions(events)
+      # bug? max_pos = position_ids[-1]?
       max_pos = position_ids.max()
       if max_pos > self.max_positions:
         if self.print_errors:
@@ -274,6 +275,7 @@ class MidiDataset(IterableDataset):
       # Encode tokens with appropriate vocabulary
       event_ids = torch.tensor(self.vocab.encode(events), dtype=torch.long)
 
+      # Tokenize beginning of sentence, end of sentence keys
       bos, eos = self.get_bos_eos_events()
       zero = torch.tensor([0], dtype=torch.int)
 
@@ -290,6 +292,7 @@ class MidiDataset(IterableDataset):
         bar_ids = torch.cat([zero, bar_ids, zero])
         position_ids = torch.cat([zero, position_ids, zero])
 
+        # Split up file into contexts of self.max_len
         if self.max_len > 0:
           starts = list(range(0, len(event_ids), self.max_len+1))
           if len(starts) > 1:
@@ -377,11 +380,14 @@ class MidiDataset(IterableDataset):
       return bars
 
   def get_positions(self, events):
+    # Rewrite all bar keys with Position_0
     events = [f"{POSITION_KEY}_0" if f"{BAR_KEY}_" in event else event for event in events]
+    # Get list of all position keys
     position_events = [event if f"{POSITION_KEY}_" in event else None for event in events]
-
+    # Strip POSITION_KEY from position keys, and set every other key to None
     positions = [int(pos.split('_')[-1]) if pos is not None else None for pos in position_events]
 
+    # Set first token to 0 if it is none
     if positions[0] is None:
       positions[0] = 0
     for i in range(1, len(positions)):
