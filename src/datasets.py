@@ -4,6 +4,7 @@ from torch.nn.utils.rnn import pad_sequence
 import pytorch_lightning as pl
 import math
 import os
+import urllib.parse
 import pickle
 import pandas as pd
 
@@ -563,8 +564,15 @@ class FeedbackDataset(IterableDataset):
 
     for i in range(split_len):
       try:
-        current_file_0 = self.load_file(self.split.iloc[i]['Input.recording_0_url'])
-        current_file_1 = self.load_file(self.split.iloc[i]['Input.recording_1_url'])
+        # Get file paths from URL in csv_file
+        file_0_url = urllib.parse.urlparse(self.split.iloc[i]['Input.recording_0_url'])
+        file_0_path = self.midi_root_dir + file_0_url.path[1:]
+        file_1_url = urllib.parse.urlparse(self.split.iloc[i]['Input.recording_1_url'])
+        file_1_path = self.midi_root_dir + file_1_url.path[1:]
+
+        # Load files
+        current_file_0 = self.load_file(file_0_path)
+        current_file_1 = self.load_file(file_1_path)
         current_preference = self.split.iloc[i]['Answer.preference']
       except ValueError as err:
         if self.print_errors:
@@ -670,14 +678,14 @@ class FeedbackDataset(IterableDataset):
 
           x = {
             'input_ids_0': src_0,
-            'file_0': os.path.basename(self.split.iloc[i]['Input.recording_0_url']),
+            'file_0': os.path.basename(file_0_path),
             'bar_ids_0': b_ids_0,
             'position_ids_0': p_ids_0,
             'input_ids_1': src_1,
-            'file_1': os.path.basename(self.split.iloc[i]['Input.recording_1_url']),
+            'file_1': os.path.basename(file_1_path),
             'bar_ids_1': b_ids_1,
             'position_ids_1': p_ids_1,
-            'preference': self.split.iloc[i]['Answer.preference'],
+            'preference': current_preference,
           }
 
           yield x
