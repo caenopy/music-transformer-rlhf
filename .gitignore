@@ -1,0 +1,6 @@
+.DS_Store
+lmd_full/
+checkpoints/
+lmd_full.tar.gz
+lightning_logs/
+
