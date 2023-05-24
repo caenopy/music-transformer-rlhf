@@ -12,7 +12,7 @@ from datasets import MidiDataset, SeqCollator
 from utils import medley_iterator
 from input_representation import remi2midi
 
-# changes to run it on GPU
+# Changes to run it on GPU
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 MODEL = os.getenv('MODEL', '')
@@ -20,13 +20,13 @@ MODEL = os.getenv('MODEL', '')
 ROOT_DIR = os.getenv('ROOT_DIR', './lmd_full')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
-MAX_ITER = int(os.getenv('MAX_ITER', 16_000))
-MAX_BARS = int(os.getenv('MAX_BARS', 64))
+MAX_ITER = int(os.getenv('MAX_ITER', 4096))
+MAX_BARS = int(os.getenv('MAX_BARS', 32))
 
-# always generate medleys, get 3 bars for prompt
+# Always generate medleys (used as prompt for generation)
 MAKE_MEDLEYS = os.getenv('MAKE_MEDLEYS', 'True') == 'True'
-#MAKE_MEDLEYS = os.getenv('MAKE_MEDLEYS', 'False') == 'True'
-N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 1))
+N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
+# Medley (prompt) length is 3 bars
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 3))
 
 CHECKPOINT = os.getenv('CHECKPOINT', None)
@@ -35,15 +35,15 @@ BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
 
 def reconstruct_sample(model, batch, batch_gt,
-  initial_context=1, 
+  max_initial_context=1, 
   output_dir=None, 
   max_iter=-1, 
   max_bars=-1,
   verbose=0,
 ):
-  batch_size, seq_len = batch['input_ids'].shape[:2]
+  batch_size, prompt_len = batch['input_ids'].shape[:2]
 
-  batch_ = { key: batch[key][:, :initial_context] for key in ['input_ids', 'bar_ids', 'position_ids'] }
+  batch_ = { key: batch[key][:, :max_initial_context] for key in ['input_ids', 'bar_ids', 'position_ids'] }
   if model.description_flavor in ['description', 'both']:
     raise
     batch_['description'] = batch['description']
@@ -52,11 +52,11 @@ def reconstruct_sample(model, batch, batch_gt,
     raise
     batch_['latents'] = batch['latents']
 
-  max_len = seq_len + 4096
+  max_len = prompt_len + 4096 # default max length
   if max_iter > 0:
-    max_len = min(max_len, initial_context + max_iter)
+    max_len = prompt_len + max_iter #min(max_len, initial_context + max_iter)
   if verbose:
-    print(f"Generating sequence ({initial_context} initial / {max_len} max length / {max_bars} max bars / {batch_size} batch size)")
+    print(f"Generating sequence ({prompt_len} prompt tokens / {max_len} max tokens / {max_bars} max bars / {batch_size} batch size)")
   sample = model.sample(batch_, max_length=max_len, max_bars=max_bars, verbose=0)#verbose=verbose//2)
 
   # Run ground truth through FIGARO encoding, so vocabulary is restricted for fair comparison
@@ -72,7 +72,7 @@ def reconstruct_sample(model, batch, batch_gt,
 
   pms, pms_gt, pms_hat = [], [], []
   n_fatal = 0
-  # don't do this zip thing: just for loop normally
+  # Don't do this zip thing: just for loop normally
   for rec, rec_gt, rec_hat in zip(events, events_gt, events_hat):
     try:
       print('Decoding prompt')
@@ -147,9 +147,11 @@ def main():
 
   if MAX_N_FILES > 0:
     midi_files = midi_files[:MAX_N_FILES]
-    os.makedirs(os.path.join(output_dir, 'original'), exist_ok=True)
-    for f in midi_files:
-        shutil.copyfile(f, os.path.join(output_dir, 'original', os.path.basename(f)))
+
+  # Make copies of prompts used for this generation run
+  os.makedirs(os.path.join(output_dir, 'original'), exist_ok=True)
+  for f in midi_files:
+      shutil.copyfile(f, os.path.join(output_dir, 'original', os.path.basename(f)))
 
   description_options = None
   if MODEL in ['figaro-no-inst', 'figaro-no-chord', 'figaro-no-meta']:
@@ -164,25 +166,24 @@ def main():
     vae_module=vae_module
   )
 
-
   start_time = time.time()
   coll = SeqCollator(context_size=-1)
   dl = DataLoader(dataset, batch_size=BATCH_SIZE, collate_fn=coll)
 
   if MAKE_MEDLEYS:
-    # get 3 bars 
+    # Get 3 bars for prompt
     dl_short = medley_iterator(dl, 
       n_pieces=N_MEDLEY_PIECES,
       n_bars=N_MEDLEY_BARS, 
       description_flavor=model.description_flavor
     )
-    # this is ground truth, get 64 bars
+    # This is ground truth, get MAX_BARS bars
     dl_long = medley_iterator(dl, 
       n_pieces=N_MEDLEY_PIECES,
-      n_bars=64, 
+      n_bars=MAX_BARS, 
       description_flavor=model.description_flavor
     )
-    # how many REMI tokens you use as a prompt:
+    # Max number of REMI tokens to use as a prompt
     initial_context=10000
   else:
     initial_context=1
@@ -190,7 +191,7 @@ def main():
   with torch.no_grad():
     for batch_short, batch_long in zip(dl_short, dl_long):
       reconstruct_sample(model, batch_short, batch_long,
-        initial_context=initial_context,
+        max_initial_context=initial_context,
         output_dir=output_dir, 
         max_iter=MAX_ITER, 
         max_bars=max_bars,

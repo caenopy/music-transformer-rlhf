@@ -304,6 +304,17 @@ class Seq2SeqModule(pl.LightningModule):
       'interval': 'step',
     }]
 
+  '''
+  Sample from the model
+  ---------------------
+  batch: batch to use as prompt
+  max_length: maximum number of tokens that will be generated
+  max_bars: if max_bars is reached, the track will have pad tokens after the last bar
+  temp: temperature of the sampling
+  pad_token: token to use for padding
+  eos_token: token to use for end of sequence
+  verbose: verbosity level
+  '''
   @torch.no_grad()
   def sample(self, batch, 
     max_length=256, 
@@ -316,10 +327,10 @@ class Seq2SeqModule(pl.LightningModule):
     verbose=10
     
     # Setup and parsing arguments
-
     pad_token_id = self.vocab.to_i(pad_token)
     eos_token_id = self.vocab.to_i(eos_token)
 
+    # Get batch size and prompt length
     batch_size, curr_len = batch['input_ids'].shape
 
     i = curr_len - 1
@@ -351,6 +362,7 @@ class Seq2SeqModule(pl.LightningModule):
     # Sample using decoder until max_length is reached or all sequences are done
     for i in range(curr_len - 1, max_length):
       # print(f"\r{i+1}/{max_length}", end='')
+      # Limit input_ids to context size
       x_ = x[:, -self.context_size:].to(self.device)
       bar_ids_ = bar_ids[:, -self.context_size:].to(self.device)
       position_ids_ = position_ids[:, -self.context_size:].to(self.device)
