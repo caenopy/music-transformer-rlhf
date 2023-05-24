@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import math
 import os
 import pickle
+import pandas as pd
 
 from input_representation import InputRepresentation
 from vocab import RemiVocab, DescriptionVocab
@@ -500,3 +501,316 @@ class MidiDataset(IterableDataset):
           print('Unable to cache file:', str(err))
     
     return latents.cpu(), codes.cpu()
+  
+def _get_split_csv(dataframe, worker_info):
+  if worker_info:
+    n_workers = worker_info.num_workers
+    worker_id = worker_info.id
+
+    per_worker = math.ceil(len(dataframe) / n_workers)
+    start_idx = per_worker*worker_id
+    end_idx = start_idx + per_worker
+
+    split = dataframe.iloc[start_idx:end_idx]
+  else:
+    split = dataframe
+  return split
+
+
+class FeedbackDataset(IterableDataset):
+  """Musicality comparison dataset for RLHF."""
+
+  def __init__(self, 
+               csv_file, 
+               midi_root_dir,
+               max_len, 
+               max_bars=512, 
+               max_positions=512,
+               max_bars_per_context=-1,
+               max_contexts_per_file=-1,
+               bar_token_mask=None,
+               bar_token_idx=2,
+               use_cache=False,
+               print_errors=False):
+    
+    self.csv_file = csv_file
+    self.midi_root_dir = midi_root_dir
+    self.max_len = max_len
+    self.max_bars = max_bars
+    self.max_positions = max_positions
+    self.max_bars_per_context = max_bars_per_context
+    self.max_contexts_per_file = max_contexts_per_file
+    self.use_cache = use_cache
+    self.print_errors = print_errors
+    self.bar_token_mask = bar_token_mask
+    self.bar_token_idx = bar_token_idx
+
+    self.vocab = RemiVocab()
+
+    self.dataframe = pd.read_csv(self.csv_file)
+
+    if CACHE_PATH:
+      self.cache_path = os.path.join(CACHE_PATH, InputRepresentation.version())
+      os.makedirs(self.cache_path, exist_ok=True)
+      # print(f"Using cache path: {self.cache_path}")
+    else:
+      self.cache_path = None
+
+  def __iter__(self):
+    worker_info = torch.utils.data.get_worker_info()
+    self.split = _get_split_csv(self.dataframe, worker_info)
+    split_len = len(self.split)
+
+    for i in range(split_len):
+      try:
+        current_file_0 = self.load_file(self.split.iloc[i]['Input.recording_0_url'])
+        current_file_1 = self.load_file(self.split.iloc[i]['Input.recording_1_url'])
+        current_preference = self.split.iloc[i]['Answer.preference']
+      except ValueError as err:
+        if self.print_errors:
+          print(err)
+        # raise err
+        continue
+
+      events_0 = current_file_0['events']
+      events_1 = current_file_1['events']
+
+      # Identify start of bars
+      bars_0, bar_ids_0 = self.get_bars(events_0, include_ids=True)
+      bars_1, bar_ids_1 = self.get_bars(events_1, include_ids=True)
+      if len(bars_0) > self.max_bars or len(bars_1) > self.max_bars:
+        if self.print_errors:
+          print(f"WARNING: REMI sequence has more than {self.max_bars} bars: {len(bars_0)} event bars.")
+        continue
+      
+      # Identify positions
+      position_ids_0 = self.get_positions(events_0)
+      position_ids_1 = self.get_positions(events_1)
+      # bug? max_pos = position_ids[-1]?
+      max_pos_0 = position_ids_0.max()
+      max_pos_1 = position_ids_1.max()
+      if max_pos_0 > self.max_positions or max_pos_1 > self.max_positions:
+        if self.print_errors:
+          print(f"WARNING: REMI sequence has more than {self.max_positions} positions: {max_pos.item()} positions found")
+        continue
+
+      # Mask bar tokens if required
+      if self.bar_token_mask is not None and self.max_bars_per_context > 0:
+        events_0 = self.mask_bar_tokens(events_0, bar_token_mask=self.bar_token_mask)
+        events_1 = self.mask_bar_tokens(events_1, bar_token_mask=self.bar_token_mask)
+      
+      # Encode tokens with appropriate vocabulary
+      event_ids_0 = torch.tensor(self.vocab.encode(events_0), dtype=torch.long)
+      event_ids_1 = torch.tensor(self.vocab.encode(events_1), dtype=torch.long)
+
+      # Tokenize beginning of sentence, end of sentence keys
+      bos, eos = self.get_bos_eos_events()
+      zero = torch.tensor([0], dtype=torch.int)
+
+      if self.max_bars_per_context and self.max_bars_per_context > 0:
+        # Find all indices where a new context starts based on number of bars per context
+        starts_0 = [bars_0[i] for i in range(0, len(bars_0), self.max_bars_per_context)]
+        starts_1 = [bars_1[i] for i in range(0, len(bars_1), self.max_bars_per_context)]
+        # Convert starts to ranges
+        contexts_0 = list(zip(starts_0[:-1], starts_0[1:])) + [(starts_0[-1], len(event_ids_0))]
+        contexts_1 = list(zip(starts_1[:-1], starts_1[1:])) + [(starts_1[-1], len(event_ids_1))]
+        # # Limit the size of the range if it's larger than the max. context size
+        # contexts = [(max(start, end - (self.max_len+1)), end) for (start, end) in contexts]
+
+      else:
+        event_ids_0 = torch.cat([bos, event_ids_0, eos])
+        bar_ids_0 = torch.cat([zero, bar_ids_0, zero])
+        position_ids_0 = torch.cat([zero, position_ids_0, zero])
+        event_ids_1 = torch.cat([bos, event_ids_1, eos])
+        bar_ids_1 = torch.cat([zero, bar_ids_1, zero])
+        position_ids_1 = torch.cat([zero, position_ids_1, zero])
+
+        # Make sure both sequences are the same length, take the smaller length of the two
+        smaller_events_len = min(len(event_ids_0), len(event_ids_1))
+        event_ids_0 = event_ids_0[:smaller_events_len]
+        event_ids_1 = event_ids_1[:smaller_events_len]
+
+        # Split up file into contexts of self.max_len
+        if self.max_len > 0:
+          starts = list(range(0, len(event_ids_0), self.max_len+1))
+          if len(starts) > 1:
+            contexts_0 = [(start, start + self.max_len+1) for start in starts[:-1]] + [(len(event_ids_0) - (self.max_len+1), len(event_ids_0))]
+            contexts_1 = [(start, start + self.max_len+1) for start in starts[:-1]] + [(len(event_ids_1) - (self.max_len+1), len(event_ids_1))]
+          elif len(starts) > 0:
+            contexts_0 = [(starts[0], self.max_len+1)]
+            contexts_1 = [(starts[0], self.max_len+1)]
+        else:
+          contexts_0 = [(0, len(event_ids_0))]
+          contexts_1 = [(0, len(event_ids_1))]
+        
+        if self.max_contexts_per_file and self.max_contexts_per_file > 0:
+          contexts_0 = contexts_0[:self.max_contexts_per_file]
+          contexts_1 = contexts_1[:self.max_contexts_per_file]
+
+        for start, end in contexts_0:
+          # Add <bos> and <eos> to each context if contexts are limited to a certain number of bars
+          if self.max_bars_per_context and self.max_bars_per_context > 0:
+            src_0 = torch.cat([bos, event_ids_0[start:end], eos])
+            b_ids_0 = torch.cat([zero, bar_ids_0[start:end], zero])
+            p_ids_0 = torch.cat([zero, position_ids_0[start:end], zero])
+            src_1 = torch.cat([bos, event_ids_1[start:end], eos])
+            b_ids_1 = torch.cat([zero, bar_ids_1[start:end], zero])
+            p_ids_1 = torch.cat([zero, position_ids_1[start:end], zero])
+          else:
+            src_0 = event_ids_0[start:end]
+            b_ids_0 = bar_ids_0[start:end]
+            p_ids_0 = position_ids_0[start:end]
+            src_1 = event_ids_1[start:end]
+            b_ids_1 = bar_ids_1[start:end]
+            p_ids_1 = position_ids_1[start:end]
+
+          if self.max_len > 0:
+            src_0 = src_0[:self.max_len + 1]
+            src_1 = src_1[:self.max_len + 1]
+
+          x = {
+            'input_ids_0': src_0,
+            'file_0': os.path.basename(self.split.iloc[i]['Input.recording_0_url']),
+            'bar_ids_0': b_ids_0,
+            'position_ids_0': p_ids_0,
+            'input_ids_1': src_1,
+            'file_1': os.path.basename(self.split.iloc[i]['Input.recording_1_url']),
+            'bar_ids_1': b_ids_1,
+            'position_ids_1': p_ids_1,
+            'preference': self.split.iloc[i]['Answer.preference'],
+          }
+
+          yield x
+
+  def load_file(self, file):
+      name = os.path.basename(file)
+      if self.cache_path and self.use_cache:
+        cache_file = os.path.join(self.cache_path, name)
+
+      try:
+        # Try to load the file in case it's already in the cache
+        sample = pickle.load(open(cache_file, 'rb'))
+      except Exception:
+        # If there's no cached version, compute the representations
+        try:
+          rep = InputRepresentation(file, strict=True)
+          events = rep.get_remi_events()
+          description = rep.get_description()
+        except Exception as err:
+          raise ValueError(f'Unable to load file {file}') from err
+
+        sample = {
+          'events': events,
+          'description': description
+        }
+
+        if self.use_cache:
+          # Try to store the computed representation in the cache directory
+          try:
+            pickle.dump(sample, open(cache_file, 'wb'))
+          except Exception as err:
+            print('Unable to cache file:', str(err))
+
+      if self.description_flavor in ['latent', 'both']:
+        latents, codes = self.get_latent_representation(sample['events'], name)
+        sample['latents'] = latents
+        sample['codes'] = codes
+
+      if self.description_options is not None and len(self.description_options) > 0:
+        opts = self.description_options
+        kwargs = { key: opts[key] for key in ['instruments', 'chords', 'meta'] if key in opts }
+        sample['description'] = self.preprocess_description(sample['description'], **self.description_options)
+      
+      return sample
+  
+  def get_latent_representation(self, events, cache_key=None, bar_token_mask='<mask>'):
+    if cache_key and self.use_cache:
+      cache_file = os.path.join(self.latent_cache_path, cache_key)
+    
+    try:
+      latents, codes = pickle.load(open(cache_file, 'rb'))
+    except Exception:
+      bars = self.get_bars(events)
+      self.mask_bar_tokens(events, bar_token_mask=bar_token_mask)
+
+      event_ids = torch.tensor(self.vocab.encode(events), dtype=torch.long)
+
+      groups = [event_ids[start:end] for start, end in zip(bars[:-1], bars[1:])]
+      groups.append(event_ids[bars[-1]:])
+
+      bos, eos = self.get_bos_eos_events()
+
+      self.vae_module.eval()
+      self.vae_module.freeze()
+
+      latents = []
+      codes = []
+      for bar in groups:
+        x = torch.cat([bos, bar, eos])[:self.vae_module.context_size].unsqueeze(0).to(device)
+        out = self.vae_module.encode(x)
+        z, code = out['z'], out['codes']
+        latents.append(z)
+        codes.append(code)
+
+      latents = torch.cat(latents)
+      codes = torch.cat(codes)
+
+      if self.use_cache:
+        # Try to store the computed representation in the cache directory
+        try:
+          pickle.dump((latents.cpu(), codes.cpu()), open(cache_file, 'wb'))
+        except Exception as err:
+          print('Unable to cache file:', str(err))
+    
+    return latents.cpu(), codes.cpu()
+  
+  def get_bars(self, events, include_ids=False):
+    bars = [i for i, event in enumerate(events) if f"{BAR_KEY}_" in event]
+    
+    if include_ids:
+      bar_ids = torch.bincount(torch.tensor(bars, dtype=torch.int), minlength=len(events))
+      bar_ids = torch.cumsum(bar_ids, dim=0)
+
+      return bars, bar_ids
+    else:
+      return bars
+
+  def get_positions(self, events):
+    # Rewrite all bar keys with Position_0
+    events = [f"{POSITION_KEY}_0" if f"{BAR_KEY}_" in event else event for event in events]
+    # Get list of all position keys
+    position_events = [event if f"{POSITION_KEY}_" in event else None for event in events]
+    # Strip POSITION_KEY from position keys, and set every other key to None
+    positions = [int(pos.split('_')[-1]) if pos is not None else None for pos in position_events]
+
+    # Set first token to 0 if it is none
+    if positions[0] is None:
+      positions[0] = 0
+    for i in range(1, len(positions)):
+      if positions[i] is None:
+        positions[i] = positions[i-1]
+    positions = torch.tensor(positions, dtype=torch.int)
+
+    return positions
+
+  def mask_bar_tokens(self, events, bar_token_mask='<mask>'):
+    events = [bar_token_mask if f'{BAR_KEY}_' in token else token for token in events]
+    return events
+  
+  def get_bos_eos_events(self, tuple_size=8):
+    bos_event = torch.tensor(self.vocab.encode([BOS_TOKEN]), dtype=torch.long)
+    eos_event = torch.tensor(self.vocab.encode([EOS_TOKEN]), dtype=torch.long)
+    return bos_event, eos_event
+
+  def preprocess_description(self, desc, instruments=True, chords=True, meta=True):
+    valid_keys = {
+      BAR_KEY: True,
+      INSTRUMENT_KEY: instruments,
+      CHORD_KEY: chords,
+      TIME_SIGNATURE_KEY: meta,
+      NOTE_DENSITY_KEY: meta,
+      MEAN_PITCH_KEY: meta,
+      MEAN_VELOCITY_KEY: meta,
+      MEAN_DURATION_KEY: meta,
+    }
+    return [token for token in desc if len(token.split('_')) == 0 or valid_keys[token.split('_')[0]]]
