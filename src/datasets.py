@@ -55,7 +55,7 @@ class MidiDataModule(pl.LightningDataModule):
     n_valid = len(valid_files)
     n_test = len(test_files)
 
-    print(f'Train split {n_train} MIDIs; Validation split {n_valid} MIDIs; Test split {n_test} MIDIs')
+    print(f'MidiDataModule Setup: Train split {n_train} MIDIs; Validation split {n_valid} MIDIs; Test split {n_test} MIDIs')
 
     self.train_ds = MidiDataset(train_files, self.max_len, 
       description_flavor=self.description_flavor,

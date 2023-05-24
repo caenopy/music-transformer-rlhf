@@ -192,6 +192,7 @@ def main():
     pin_memory=True
   )
 
+  # Callback used to retrieve a checkpoint during training
   checkpoint_callback = pl.callbacks.model_checkpoint.ModelCheckpoint(
     monitor='valid_loss',
     dirpath=os.path.join(OUTPUT_DIR, MODEL),

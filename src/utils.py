@@ -75,7 +75,7 @@ def combine_batches(batches, bars_per_sequence=8, description_flavor='none', dev
         ctx['latent_slices'].append((latent_start, latent_end))
       ctx['files'].append(batch['files'][i])
 
-    # This is their sanity check that there are two files to make a medley
+    # This is their sanity check that there are two files to make a medley, disabled since we're using this for prompt generation
     #if len(ctx['files']) <= 1:
     #  continue
   
