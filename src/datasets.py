@@ -580,6 +580,12 @@ class FeedbackDataset(IterableDataset):
         # raise err
         continue
 
+      # Skip if preference is '2' (no preference), Normalize preference
+      if current_preference == 2:
+        continue
+      else:
+        current_preference = (current_preference - 1) / 2
+
       events_0 = current_file_0['events']
       events_1 = current_file_1['events']
 
