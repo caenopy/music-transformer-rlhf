@@ -718,59 +718,8 @@ class FeedbackDataset(IterableDataset):
             pickle.dump(sample, open(cache_file, 'wb'))
           except Exception as err:
             print('Unable to cache file:', str(err))
-
-      if self.description_flavor in ['latent', 'both']:
-        latents, codes = self.get_latent_representation(sample['events'], name)
-        sample['latents'] = latents
-        sample['codes'] = codes
-
-      if self.description_options is not None and len(self.description_options) > 0:
-        opts = self.description_options
-        kwargs = { key: opts[key] for key in ['instruments', 'chords', 'meta'] if key in opts }
-        sample['description'] = self.preprocess_description(sample['description'], **self.description_options)
       
       return sample
-  
-  def get_latent_representation(self, events, cache_key=None, bar_token_mask='<mask>'):
-    if cache_key and self.use_cache:
-      cache_file = os.path.join(self.latent_cache_path, cache_key)
-    
-    try:
-      latents, codes = pickle.load(open(cache_file, 'rb'))
-    except Exception:
-      bars = self.get_bars(events)
-      self.mask_bar_tokens(events, bar_token_mask=bar_token_mask)
-
-      event_ids = torch.tensor(self.vocab.encode(events), dtype=torch.long)
-
-      groups = [event_ids[start:end] for start, end in zip(bars[:-1], bars[1:])]
-      groups.append(event_ids[bars[-1]:])
-
-      bos, eos = self.get_bos_eos_events()
-
-      self.vae_module.eval()
-      self.vae_module.freeze()
-
-      latents = []
-      codes = []
-      for bar in groups:
-        x = torch.cat([bos, bar, eos])[:self.vae_module.context_size].unsqueeze(0).to(device)
-        out = self.vae_module.encode(x)
-        z, code = out['z'], out['codes']
-        latents.append(z)
-        codes.append(code)
-
-      latents = torch.cat(latents)
-      codes = torch.cat(codes)
-
-      if self.use_cache:
-        # Try to store the computed representation in the cache directory
-        try:
-          pickle.dump((latents.cpu(), codes.cpu()), open(cache_file, 'wb'))
-        except Exception as err:
-          print('Unable to cache file:', str(err))
-    
-    return latents.cpu(), codes.cpu()
   
   def get_bars(self, events, include_ids=False):
     bars = [i for i, event in enumerate(events) if f"{BAR_KEY}_" in event]
