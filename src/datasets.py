@@ -502,27 +502,91 @@ class MidiDataset(IterableDataset):
           print('Unable to cache file:', str(err))
     
     return latents.cpu(), codes.cpu()
+
+class FeedbackDataModule(pl.LightningDataModule):
+  def __init__(self,
+               feedback_data,
+               midi_root_dir,
+               max_len,
+               batch_size=32, 
+               num_workers=4,
+               pin_memory=True, 
+               train_val_test_split=(0.95, 0.1, 0.05), 
+               description_flavor='none',
+               vae_module=None,
+               **kwargs):
+    super().__init__()
+    self.feedback_data = feedback_data
+    self.midi_root_dir = midi_root_dir
+    self.max_len = max_len
+    self.batch_size = batch_size
+    self.num_workers = num_workers
+    self.pin_memory = pin_memory
+    self.train_val_test_split = train_val_test_split
+    self.description_flavor = description_flavor
+    self.vae_module = vae_module
+    self.kwargs = kwargs
+
+    self.vocab = RemiVocab()
+
+  def setup(self, stage=None):
+    n_valid = int(self.train_val_test_split[1] * len(self.feedback_data))
+    n_test = int(self.train_val_test_split[2] * len(self.feedback_data))
+    train_files = self.feedback_data[n_test+n_valid:]
+    valid_files = self.feedback_data[n_test:n_test+n_valid]
+    test_files = self.feedback_data[:n_test]
+
+    n_train = len(train_files)
+    n_valid = len(valid_files)
+    n_test = len(test_files)
+
+    print(f'FeedbackDataModule Setup: Train split {n_train}; Validation split {n_valid}; Test split {n_test}')
+
+    self.train_ds = FeedbackDataset(feedback_data=train_files, 
+                                    midi_root_dir=self.midi_root_dir,
+                                    max_len=self.max_len,
+                                    **self.kwargs)
+    self.valid_ds = FeedbackDataset(feedback_data=valid_files, 
+                                    midi_root_dir=self.midi_root_dir,
+                                    max_len=self.max_len,
+                                    **self.kwargs)
+    self.test_ds = FeedbackDataset(feedback_data=test_files, 
+                                    midi_root_dir=self.midi_root_dir,
+                                    max_len=self.max_len,
+                                    **self.kwargs)
+    
+    # Use a shuffled dataset only for training
+    self.train_ds = torch.utils.data.datapipes.iter.combinatorics.ShuffleIterDataPipe(self.train_ds, buffer_size=2048)
+
+    self.collator = SeqCollator(pad_token=self.vocab.to_i(PAD_TOKEN), context_size=self.max_len)
+
+  def train_dataloader(self):
+    return DataLoader(self.train_ds, 
+                      collate_fn=self.collator, 
+                      batch_size=self.batch_size, 
+                      pin_memory=self.pin_memory, 
+                      num_workers=self.num_workers)
+
+  def val_dataloader(self):
+    return DataLoader(self.valid_ds, 
+                      collate_fn=self.collator, 
+                      batch_size=self.batch_size, 
+                      pin_memory=self.pin_memory, 
+                      num_workers=self.num_workers)
+
+  def test_dataloader(self):
+    return DataLoader(self.test_ds, 
+                      collate_fn=self.collator, 
+                      batch_size=self.batch_size, 
+                      pin_memory=self.pin_memory, 
+                      num_workers=self.num_workers)
   
-def _get_split_csv(dataframe, worker_info):
-  if worker_info:
-    n_workers = worker_info.num_workers
-    worker_id = worker_info.id
-
-    per_worker = math.ceil(len(dataframe) / n_workers)
-    start_idx = per_worker*worker_id
-    end_idx = start_idx + per_worker
-
-    split = dataframe.iloc[start_idx:end_idx]
-  else:
-    split = dataframe
-  return split
-
 
 class FeedbackDataset(IterableDataset):
   """Musicality comparison dataset for RLHF."""
 
   def __init__(self, 
-               csv_file, 
+               feedback_data, 
                midi_root_dir,
                max_len, 
                max_bars=512, 
@@ -534,7 +598,7 @@ class FeedbackDataset(IterableDataset):
                use_cache=False,
                print_errors=False):
     
-    self.csv_file = csv_file
+    self.feedback_data = feedback_data
     self.midi_root_dir = midi_root_dir
     self.max_len = max_len
     self.max_bars = max_bars
@@ -548,8 +612,6 @@ class FeedbackDataset(IterableDataset):
 
     self.vocab = RemiVocab()
 
-    self.dataframe = pd.read_csv(self.csv_file)
-
     if CACHE_PATH:
       self.cache_path = os.path.join(CACHE_PATH, InputRepresentation.version())
       os.makedirs(self.cache_path, exist_ok=True)
@@ -559,21 +621,21 @@ class FeedbackDataset(IterableDataset):
 
   def __iter__(self):
     worker_info = torch.utils.data.get_worker_info()
-    self.split = _get_split_csv(self.dataframe, worker_info)
+    self.split = _get_split(self.feedback_data, worker_info)
     split_len = len(self.split)
 
     for i in range(split_len):
       try:
         # Get file paths from URL in csv_file
-        file_0_url = urllib.parse.urlparse(self.split.iloc[i]['Input.recording_0_url'])
+        file_0_url = urllib.parse.urlparse(self.split[i]['Input.recording_0_url'])
         file_0_path = self.midi_root_dir + file_0_url.path[1:]
-        file_1_url = urllib.parse.urlparse(self.split.iloc[i]['Input.recording_1_url'])
+        file_1_url = urllib.parse.urlparse(self.split[i]['Input.recording_1_url'])
         file_1_path = self.midi_root_dir + file_1_url.path[1:]
 
         # Load files
         current_file_0 = self.load_file(file_0_path)
         current_file_1 = self.load_file(file_1_path)
-        current_preference = self.split.iloc[i]['Answer.preference']
+        current_preference = self.split[i]['Answer.preference']
       except ValueError as err:
         if self.print_errors:
           print(err)
