@@ -627,15 +627,15 @@ class FeedbackDataset(IterableDataset):
     for i in range(split_len):
       try:
         # Get file paths from URL in csv_file
-        file_0_url = urllib.parse.urlparse(self.split[i]['Input.recording_0_url'])
-        file_0_path = self.midi_root_dir + file_0_url.path[1:]
-        file_1_url = urllib.parse.urlparse(self.split[i]['Input.recording_1_url'])
-        file_1_path = self.midi_root_dir + file_1_url.path[1:]
+        file_0_url = urllib.parse.urlparse(self.split[i][0])
+        file_0_path = self.midi_root_dir + os.path.splitext(file_0_url.path)[0] + '.mid'
+        file_1_url = urllib.parse.urlparse(self.split[i][1])
+        file_1_path = self.midi_root_dir + os.path.splitext(file_1_url.path)[0] + '.mid'
 
         # Load files
         current_file_0 = self.load_file(file_0_path)
         current_file_1 = self.load_file(file_1_path)
-        current_preference = self.split[i]['Answer.preference']
+        current_preference = self.split[i][2]
       except ValueError as err:
         if self.print_errors:
           print(err)
