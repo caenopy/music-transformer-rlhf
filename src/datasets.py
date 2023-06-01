@@ -558,7 +558,7 @@ class FeedbackDataModule(pl.LightningDataModule):
     # Use a shuffled dataset only for training
     self.train_ds = torch.utils.data.datapipes.iter.combinatorics.ShuffleIterDataPipe(self.train_ds, buffer_size=2048)
 
-    self.collator = SeqCollator(pad_token=self.vocab.to_i(PAD_TOKEN), context_size=self.max_len)
+    self.collator = FeedbackSeqCollator(pad_token=self.vocab.to_i(PAD_TOKEN), context_size=self.max_len)
 
   def train_dataloader(self):
     return DataLoader(self.train_ds, 
@@ -581,6 +581,84 @@ class FeedbackDataModule(pl.LightningDataModule):
                       pin_memory=self.pin_memory, 
                       num_workers=self.num_workers)
   
+class FeedbackSeqCollator:
+  def __init__(self, pad_token=0, context_size=512):
+    self.pad_token = pad_token
+    self.context_size = context_size
+
+  def __call__(self, features):
+    batch = {}
+
+    # First file 
+
+    xs = [feature['input_ids_0'] for feature in features]
+    xs = pad_sequence(xs, batch_first=True, padding_value=self.pad_token)
+
+    if self.context_size > 0:
+      max_len = self.context_size
+      max_desc_len = self.context_size
+    else:
+      max_len = xs.size(1)
+      max_desc_len = int(1e4)
+
+    tmp = xs[:, :(max_len + 1)][:, :-1]
+    xs = tmp
+
+    seq_len = xs.size(1)
+    
+    batch['input_ids_0'] = xs
+
+    if 'position_ids_0' in features[0]:
+      position_ids = [feature['position_ids_0'] for feature in features]
+      position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0)
+      batch['position_ids_0'] = position_ids[:, :seq_len]
+
+    if 'bar_ids_0' in features[0]:
+      bar_ids = [feature['bar_ids_0'] for feature in features]
+      bar_ids = pad_sequence(bar_ids, batch_first=True, padding_value=0)
+      batch['bar_ids_0'] = bar_ids[:, :seq_len]
+
+    if 'file_0' in features[0]:
+      batch['file_0'] = [feature['file_0'] for feature in features]
+
+    # Second file
+
+    xs = [feature['input_ids_1'] for feature in features]
+    xs = pad_sequence(xs, batch_first=True, padding_value=self.pad_token)
+
+    if self.context_size > 0:
+      max_len = self.context_size
+      max_desc_len = self.context_size
+    else:
+      max_len = xs.size(1)
+      max_desc_len = int(1e4)
+
+    tmp = xs[:, :(max_len + 1)][:, :-1]
+    xs = tmp
+
+    seq_len = xs.size(1)
+    
+    batch['input_ids_1'] = xs
+
+    if 'position_ids_1' in features[0]:
+      position_ids = [feature['position_ids_1'] for feature in features]
+      position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0)
+      batch['position_ids_1'] = position_ids[:, :seq_len]
+
+    if 'bar_ids_1' in features[0]:
+      bar_ids = [feature['bar_ids_1'] for feature in features]
+      bar_ids = pad_sequence(bar_ids, batch_first=True, padding_value=0)
+      batch['bar_ids_1'] = bar_ids[:, :seq_len]
+
+    if 'file_1' in features[0]:
+      batch['file_1'] = [feature['file_1'] for feature in features]
+
+    # Preference
+
+    if 'preference' in features[0]:
+      batch['preference'] = [feature['preference'] for feature in features]
+    
+    return batch
 
 class FeedbackDataset(IterableDataset):
   """Musicality comparison dataset for RLHF."""
@@ -635,7 +713,7 @@ class FeedbackDataset(IterableDataset):
         # Load files
         current_file_0 = self.load_file(file_0_path)
         current_file_1 = self.load_file(file_1_path)
-        current_preference = self.split[i][2]
+        current_preference = int(self.split[i][2])
       except ValueError as err:
         if self.print_errors:
           print(err)

@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import math
-from seq2seq import Seq2SeqModule
-from datasets import MidiDataModule
+from models.seq2seq import Seq2SeqModule
+from datasets import MidiDataModule, FeedbackDataModule
 from vocab import RemiVocab, DescriptionVocab
 from constants import PAD_TOKEN, EOS_TOKEN, BAR_KEY, POSITION_KEY
 
@@ -25,7 +25,7 @@ This module is a reward model for RLHF using the baseline figaro (Music Transfor
 """
 class RewardModule(pl.LightningModule):
   def __init__(self,
-               checkpoint,
+               backbone_checkpoint,
                d_model=512,
                context_size=512,
                lr=1e-4,
@@ -51,18 +51,27 @@ class RewardModule(pl.LightningModule):
 
     self.vocab = RemiVocab()
     
-    self.backbone = Seq2SeqModule.load_from_checkpoint(checkpoint_path=checkpoint)
+    self.backbone = Seq2SeqModule.load_from_checkpoint(checkpoint_path=backbone_checkpoint)
     assert(self.backbone.d_model == self.d_model and self.backbone.context_size == self.context_size)
 
-    self.out_layer = nn.Linear(self.d_model, 1)
+    self.out_layer = nn.Linear(self.d_model * self.context_size, 1)
 
     self.save_hyperparameters()
+
+  def get_datamodule(self, feedback_data, midi_root_dir, **kwargs):
+    return FeedbackDataModule(
+      feedback_data, 
+      midi_root_dir,
+      self.context_size,
+      **kwargs
+    )
 
   def forward(self, x, bar_ids=None, position_ids=None, return_hidden=False):
     # TODO, eventually train all weights, only train last layer for testing
     self.backbone.eval()
     with torch.no_grad():
       hidden = self.backbone.decode(x, bar_ids=bar_ids, position_ids=position_ids, return_hidden=True)
+      hidden = hidden.reshape(hidden.shape[0], -1)
     logits = self.out_layer(hidden)
     return logits
 
@@ -81,7 +90,7 @@ class RewardModule(pl.LightningModule):
 
     logits = rewards_1 - rewards_0
 
-    loss = F.binary_cross_entropy_with_logits(logits, preference.to(logits.dtype), reduction='mean')
+    loss = F.binary_cross_entropy_with_logits(logits, torch.unsqueeze(torch.Tensor(preference), 1), reduction='mean')
 
     # logits = self(x, z=z, labels=labels, bar_ids=bar_ids, position_ids=position_ids, description_bar_ids=desc_bar_ids)
     # # Shape of logits: (batch_size, tgt_len, tuple_size, vocab_size)
