@@ -26,8 +26,8 @@ D_LATENT = int(os.getenv('D_LATENT', 1024))
 CHECKPOINT = os.getenv('CHECKPOINT', None)
 VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
 
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 128))
-TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 512))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))
+TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 256))
 
 EPOCHS = int(os.getenv('EPOCHS', '16'))
 WARMUP_STEPS = int(float(os.getenv('WARMUP_STEPS', 4000)))
@@ -42,7 +42,7 @@ ACCUMULATE_GRADS = max(1, TARGET_BATCH_SIZE//BATCH_SIZE)
 N_WORKERS = min(os.cpu_count(), float(os.getenv('N_WORKERS', 'inf')))
 if device.type == 'cuda':
   N_WORKERS = min(N_WORKERS, 8*torch.cuda.device_count())
-N_WORKERS = int(N_WORKERS)
+N_WORKERS = int(N_WORKERS - 2)
 
 
 def main():
@@ -58,6 +58,8 @@ def main():
     dfs.append(pd.read_csv(csv))
   
   df = pd.concat(dfs, axis=0, ignore_index=True)
+  # Take out neutral examples
+  df = df[df['Answer.preference'] != 2]
   # Make sure we're looking at the processed MIDI clips
   df = df.applymap(lambda value: str(value).replace('prompt', 'prompt-processed'))
   # Shuffle rows

@@ -565,21 +565,24 @@ class FeedbackDataModule(pl.LightningDataModule):
                       collate_fn=self.collator, 
                       batch_size=self.batch_size, 
                       pin_memory=self.pin_memory, 
-                      num_workers=self.num_workers)
+                      num_workers=self.num_workers,
+                      drop_last=True)
 
   def val_dataloader(self):
     return DataLoader(self.valid_ds, 
                       collate_fn=self.collator, 
                       batch_size=self.batch_size, 
                       pin_memory=self.pin_memory, 
-                      num_workers=self.num_workers)
+                      num_workers=self.num_workers,
+                      drop_last=True)
 
   def test_dataloader(self):
     return DataLoader(self.test_ds, 
                       collate_fn=self.collator, 
                       batch_size=self.batch_size, 
                       pin_memory=self.pin_memory, 
-                      num_workers=self.num_workers)
+                      num_workers=self.num_workers,
+                      drop_last=True)
   
 class FeedbackSeqCollator:
   def __init__(self, pad_token=0, context_size=512):
@@ -720,11 +723,9 @@ class FeedbackDataset(IterableDataset):
         # raise err
         continue
 
-      # Skip if preference is '2' (no preference), Normalize preference
-      if current_preference == 2:
-        continue
-      else:
-        current_preference = (current_preference - 1) / 2
+      # Normalize preference
+      assert(current_preference != 2)
+      current_preference = (current_preference - 1) / 2
 
       events_0 = current_file_0['events']
       events_1 = current_file_1['events']

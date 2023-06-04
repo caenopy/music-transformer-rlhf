@@ -71,6 +71,7 @@ class RewardModule(pl.LightningModule):
     self.backbone.eval()
     with torch.no_grad():
       hidden = self.backbone.decode(x, bar_ids=bar_ids, position_ids=position_ids, return_hidden=True)
+      # (batch_size, context_size * d_hidden)
       hidden = hidden.reshape(hidden.shape[0], -1)
     logits = self.out_layer(hidden)
     return logits
