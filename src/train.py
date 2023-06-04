@@ -178,10 +178,6 @@ def main():
         description_flavor='none',
         **dec_kwargs
       ),
-      'baseline-reward': lambda: Seq2SeqModule(
-        description_flavor='none',
-        **dec_kwargs
-      ),
     }[MODEL]()
 
   datamodule = model.get_datamodule(
