@@ -91,7 +91,7 @@ class RewardModule(pl.LightningModule):
 
     logits = rewards_1 - rewards_0
 
-    loss = F.binary_cross_entropy_with_logits(logits, torch.unsqueeze(torch.Tensor(preference), 1), reduction='mean')
+    loss = F.binary_cross_entropy_with_logits(logits, torch.unsqueeze(torch.Tensor(preference).to(self.device), 1), reduction='mean')
 
     # logits = self(x, z=z, labels=labels, bar_ids=bar_ids, position_ids=position_ids, description_bar_ids=desc_bar_ids)
     # # Shape of logits: (batch_size, tgt_len, tuple_size, vocab_size)
