@@ -67,12 +67,11 @@ class RewardModule(pl.LightningModule):
     )
 
   def forward(self, x, bar_ids=None, position_ids=None, return_hidden=False):
-    # TODO, eventually train all weights, only train last layer for testing
     self.backbone.eval()
-    with torch.no_grad():
-      hidden = self.backbone.decode(x, bar_ids=bar_ids, position_ids=position_ids, return_hidden=True)
-      # (batch_size, context_size * d_hidden)
-      hidden = hidden.reshape(hidden.shape[0], -1)
+    # with torch.no_grad():
+    hidden = self.backbone.decode(x, bar_ids=bar_ids, position_ids=position_ids, return_hidden=True)
+    # (batch_size, context_size * d_hidden)
+    hidden = hidden.reshape(hidden.shape[0], -1)
     logits = self.out_layer(hidden)
     return logits
 
