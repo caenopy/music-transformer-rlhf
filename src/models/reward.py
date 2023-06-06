@@ -1,3 +1,5 @@
+import math
+
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 import torch.optim
@@ -9,7 +11,6 @@ from models.seq2seq import Seq2SeqModule
 from datasets import MidiDataModule, FeedbackDataModule
 from vocab import RemiVocab, DescriptionVocab
 from constants import PAD_TOKEN, EOS_TOKEN, BAR_KEY, POSITION_KEY
-
 
 import transformers
 from transformers import (
@@ -54,7 +55,10 @@ class RewardModule(pl.LightningModule):
     self.backbone = Seq2SeqModule.load_from_checkpoint(checkpoint_path=backbone_checkpoint)
     assert(self.backbone.d_model == self.d_model and self.backbone.context_size == self.context_size)
 
-    self.out_layer = nn.Linear(self.d_model * self.context_size, 1)
+    self.out_layer = nn.Linear(self.d_model, 1)
+
+    nn.init.zeros_(self.out_layer.bias)
+    nn.init.orthogonal_(self.out_layer.weight, gain = math.sqrt(2))
 
     self.save_hyperparameters()
 
@@ -70,8 +74,10 @@ class RewardModule(pl.LightningModule):
     self.backbone.eval()
     # with torch.no_grad():
     hidden = self.backbone.decode(x, bar_ids=bar_ids, position_ids=position_ids, return_hidden=True)
-    # (batch_size, context_size * d_hidden)
-    hidden = hidden.reshape(hidden.shape[0], -1)
+    # Old way:(batch_size, context_size * d_hidden)
+    # hidden = hidden.reshape(hidden.shape[0], -1)
+    # New way: only take last embedding
+    hidden = hidden[:, -1, :]
     logits = self.out_layer(hidden)
     return logits
 
