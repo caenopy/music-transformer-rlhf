@@ -25,12 +25,12 @@ MAX_BARS = int(os.getenv('MAX_BARS', 32))
 
 # Always generate medleys (used as prompt for generation)
 MAKE_MEDLEYS = os.getenv('MAKE_MEDLEYS', 'True') == 'True'
-N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
+N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 1))
 # Medley (prompt) length is 3 bars
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 3))
 
 CHECKPOINT = os.getenv('CHECKPOINT', None)
-VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
+# Batch size is 1 for one prompt (medley) at a time; must be 1 for current seq2seq sample implementation
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
 
@@ -57,7 +57,7 @@ def reconstruct_sample(model, batch, batch_gt,
     max_len = prompt_len + max_iter #min(max_len, initial_context + max_iter)
   if verbose:
     print(f"Generating sequence ({prompt_len} prompt tokens / {max_len} max tokens / {max_bars} max bars / {batch_size} batch size)")
-  sample = model.sample(batch_, max_length=max_len, max_bars=max_bars, verbose=0)#verbose=verbose//2)
+  sample = model.sample(batch_, max_length=max_len, max_bars=max_bars, verbose=VERBOSE)#verbose=verbose//2)
 
   # Run ground truth through FIGARO encoding, so vocabulary is restricted for fair comparison
   xs = batch['input_ids'].detach().cpu()
@@ -128,10 +128,7 @@ def main():
 
   print(f"Saving generated files to: {output_dir}")
 
-  if VAE_CHECKPOINT:
-    vae_module = VqVaeModule.load_from_checkpoint(VAE_CHECKPOINT).to(device)
-  else:
-    vae_module = None
+  vae_module = None
 
   model = Seq2SeqModule.load_from_checkpoint(CHECKPOINT).to(device)
   model.freeze()
