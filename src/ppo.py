@@ -1,3 +1,10 @@
+import math
+import copy
+from collections import deque, namedtuple
+
+# from einops import rearrange, repeat, reduce
+from einops.layers.torch import Rearrange
+
 import shutil
 import os
 import glob
@@ -5,8 +12,8 @@ import time
 import torch
 import random
 from torch.utils.data import DataLoader
+from torch import nn
 
-from models.vae import VqVaeModule
 from models.seq2seq import Seq2SeqModule
 from datasets import MidiDataset, SeqCollator
 from utils import medley_iterator
@@ -18,7 +25,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 MODEL = os.getenv('MODEL', '')
 
 ROOT_DIR = os.getenv('ROOT_DIR', './lmd_full')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', None)
+# OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
 MAX_ITER = int(os.getenv('MAX_ITER', 4096))
 MAX_BARS = int(os.getenv('MAX_BARS', 32))
@@ -30,9 +38,174 @@ N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 3))
 
 CHECKPOINT = os.getenv('CHECKPOINT', None)
-VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
+# Batch size set to 1 for one prompt (medley) at a time
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
+
+
+
+
+
+
+PPOActionCriticReturn = namedtuple('PPOActionCriticReturn', [
+  'actions',
+  'action_logits',
+  'values'
+])
+
+# Based on https://github.com/lucidrains/PaLM-rlhf-pytorch/tree/main
+class ActorCritic(nn.Module):
+  def __init__(
+    self,
+    figaro: Seq2SeqModule,
+    critic_figaro: Seq2SeqModule = None,
+    pooled_values = False
+  ):
+    super().__init__()
+    self.actor_figaro = figaro
+
+    self.critic_figaro = critic_figaro
+
+    if not exists(self.critic_figaro):
+        self.critic_figaro = copy.deepcopy(figaro)
+
+    self.pooled_values = pooled_values
+
+    self.value_head = nn.Sequential(
+        nn.Linear(figaro.d_model * figaro.context_size, 1),
+        Rearrange('... 1 -> ...')
+    )
+
+    nn.init.zeros_(self.value_head[0].bias)
+    nn.init.orthogonal_(self.value_head[0].weight, gain = math.sqrt(2))
+
+  @torch.no_grad()
+  def generate(self, 
+                model, 
+                batch, 
+                batch_gt,
+                max_initial_context=1, 
+                output_dir=None, 
+                max_iter=-1, 
+                max_bars=-1,
+                verbose=0):
+  
+    # Generate a REMI events sequence from the current policy
+    batch_size, prompt_len = batch['input_ids'].shape[:2]
+
+    batch_ = { key: batch[key][:, :max_initial_context] for key in ['input_ids', 'bar_ids', 'position_ids'] }
+    
+    max_len = prompt_len + 4096 # default max length
+    if max_iter > 0:
+      max_len = prompt_len + max_iter #min(max_len, initial_context + max_iter)
+    if verbose:
+      print(f"Generating sequence ({prompt_len} prompt tokens / {max_len} max tokens / {max_bars} max bars / {batch_size} batch size)")
+    # The following returns sample = {'sequences': x, 'bar_ids': bar_ids, 'position_ids': position_ids}
+    actions = self.actor_figaro.sample(batch_, max_length=max_len, max_bars=max_bars, verbose=0)
+    
+    # Decode REMI events to MIDI
+    # Run ground truth through FIGARO encoding, so vocabulary is restricted for fair comparison
+    # xs = batch['input_ids'].detach().cpu()
+    # xs_gt = batch_gt['input_ids'].detach().cpu()
+    # xs_hat = sample['sequences'].detach().cpu()
+    # prompt
+    # events = [model.vocab.decode(x) for x in xs]
+    # ground truth completion of prompt
+    # events_gt = [model.vocab.decode(x) for x in xs_gt]
+    # predicted completion of prompt
+    # events_hat = [model.vocab.decode(x) for x in xs_hat]
+
+    # state + action is sample['sequences']
+    action_logits, value = self.forward(x=actions['sequences'],
+                                        labels=None, 
+                                        position_ids=actions['position_ids'], 
+                                        bar_ids=actions['bar_ids'], 
+                                        description_bar_ids=None, 
+                                        return_hidden=False,
+                                        return_values=True
+                                      )
+
+    return PPOActionCriticReturn(
+      actions,
+      action_logits,
+      value
+     ) 
+
+  def forward(
+    self,
+    x,
+    position_ids=None, 
+    bar_ids=None, 
+    return_hidden=False,
+    return_values = True
+  ):
+  
+    # Figaro decoder is Music Transformer
+    action_logits = self.actor_figaro.decode(
+      x, 
+      labels=None, 
+      bar_ids=bar_ids, 
+      position_ids=position_ids, 
+      encoder_hidden_states=None,
+      return_hidden=return_hidden
+    )
+
+    if not return_values:
+        return action_logits, None
+
+    critic_embeds = self.critic_figaro.decode(
+      x, 
+      labels=None, 
+      bar_ids=bar_ids, 
+      position_ids=position_ids, 
+      encoder_hidden_states=None,
+      return_hidden=True
+    )
+
+    critic_embeds = critic_embeds.reshape(critic_embeds.shape[0], -1)
+
+    # TODO: add functionality for pooled values
+    # if self.pooled_values:
+    #   critic_embeds = shift(critic_embeds, shift = 1, dim = -2)
+    #   critic_embeds = masked_mean(critic_embeds, mask, dim = 1)
+
+    values = self.value_head(critic_embeds)
+
+    return action_logits, values 
+
+
+# helper functions
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if callable(d) else d
+
+
+
+
+
+
+
+
+
+
+
+
+
+############################################
+# Original generate.py:
+############################################
+
+
+
+
+
+
+
 
 def reconstruct_sample(model, batch, batch_gt,
   max_initial_context=1, 
@@ -101,6 +274,10 @@ def reconstruct_sample(model, batch, batch_gt,
 
 
 def main():
+
+  #############################################################
+  # Prepare output directory and prompting (medley) parameters
+  #############################################################
   #if MAKE_MEDLEYS:
   #  max_bars = N_MEDLEY_PIECES * N_MEDLEY_BARS
   #else:
@@ -121,16 +298,18 @@ def main():
 
   print(f"Saving generated files to: {output_dir}")
 
-  if VAE_CHECKPOINT:
-    vae_module = VqVaeModule.load_from_checkpoint(VAE_CHECKPOINT).to(device)
-  else:
-    vae_module = None
+  vae_module = None
 
+  #############################################################
+  # Load model from checkpoint
+  #############################################################
   model = Seq2SeqModule.load_from_checkpoint(CHECKPOINT).to(device)
   model.freeze()
   model.eval()
 
-
+  #############################################################
+  # Load MIDI files and set up model datamodule
+  #############################################################
   midi_files = glob.glob(os.path.join(ROOT_DIR, '**/*.mid'), recursive=True)
   
   dm = model.get_datamodule(midi_files, vae_module=vae_module)
@@ -141,13 +320,18 @@ def main():
   if MAX_N_FILES > 0:
     midi_files = midi_files[:MAX_N_FILES]
 
-  # Make copies of prompts used for this generation run
+  #############################################################
+  # Make directory for copies of prompts used in this generation run
+  #############################################################
   os.makedirs(os.path.join(output_dir, 'original'), exist_ok=True)
   for f in midi_files:
       shutil.copyfile(f, os.path.join(output_dir, 'original', os.path.basename(f)))
 
   description_options = None
 
+  #############################################################
+  # Make prompts
+  #############################################################
   dataset = MidiDataset(
     midi_files,
     max_len=-1,
@@ -178,7 +362,10 @@ def main():
     initial_context=10000
   else:
     initial_context=1
-  
+
+  #############################################################
+  # Generate samples, batch short is prompts, batch long is ground truth
+  #############################################################
   with torch.no_grad():
     for batch_short, batch_long in zip(dl_short, dl_long):
       reconstruct_sample(model, batch_short, batch_long,
