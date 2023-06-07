@@ -825,11 +825,11 @@ class FeedbackDataset(IterableDataset):
 
           x = {
             'input_ids_0': src_0,
-            'file_0': os.path.basename(file_0_path),
+            'file_0': file_0_path,
             'bar_ids_0': b_ids_0,
             'position_ids_0': p_ids_0,
             'input_ids_1': src_1,
-            'file_1': os.path.basename(file_1_path),
+            'file_1': file_1_path,
             'bar_ids_1': b_ids_1,
             'position_ids_1': p_ids_1,
             'preference': current_preference,
