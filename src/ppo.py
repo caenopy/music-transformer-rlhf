@@ -17,6 +17,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 import transformers
+from torch.utils.tensorboard import SummaryWriter
 
 from models.seq2seq import Seq2SeqModule
 from datasets import MidiDataset, SeqCollator
@@ -39,6 +40,7 @@ MODEL = os.getenv('MODEL', '')
 
 ROOT_DIR = os.getenv('ROOT_DIR', './lmd_full')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', None)
+LOGGING_DIR = os.getenv('LOGGING_DIR', './rlhf-logs')
 # OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
 MAX_ITER = int(os.getenv('MAX_ITER', 4096))
@@ -465,7 +467,9 @@ class RLHFTrainer(nn.Module):
 
   def learn(
       self,
-      memories #: Deque[Memory]
+      memories, #: Deque[Memory]
+      writer,
+      time
   ):
     # stack all data stored in the memories
 
@@ -528,7 +532,9 @@ class RLHFTrainer(nn.Module):
 
         # subtract the kl penalty from the rewards
 
-        rewards = rewards - kl_penalty
+        rewards = rewards - kl_penalty.mean()
+
+        writer.add_scalar("reward", rewards[0].item(), time)
 
         # handle non-pooled values
 
@@ -567,6 +573,8 @@ class RLHFTrainer(nn.Module):
 
         self.print(f'policy_loss: {loss.item():.3f}')
 
+        writer.add_scalar("policy_loss", loss.item(), time)
+
         if exists(self.max_norm):
             self.accelerator.clip_grad_norm_(self.actor_critic.actor_parameters(), self.max_norm)
 
@@ -580,6 +588,8 @@ class RLHFTrainer(nn.Module):
 
         self.print(f'critic_loss: {value_loss.item():.3f}')
 
+        writer.add_scalar("critic_loss", value_loss.item(), time)
+
         self.accelerate.backward(value_loss)
 
         if exists(self.max_norm):
@@ -591,12 +601,14 @@ class RLHFTrainer(nn.Module):
 
   def train(
     self,
-    num_episodes = 50000,
-    max_timesteps = 500,
-    update_timesteps = 1, # TODO: 5000,
+    num_episodes = 5000,
+    max_timesteps = 1000,
+    update_timesteps = 100, # 5000,
     temperature = 1.
   ):
     device = self.device
+
+    writer = SummaryWriter(LOGGING_DIR)
 
     time = 0
     memories = deque([])
@@ -706,9 +718,10 @@ class RLHFTrainer(nn.Module):
         # learn from the stored memories
 
         if time % update_timesteps == 0:
-          self.learn(memories)
+          self.learn(memories, writer, time)
           memories.clear()
 
+    writer.close()
     print('rlhf training complete')
 
 
